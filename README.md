@@ -59,13 +59,13 @@ sequenceDiagram
   - Azure RBAC enabled AKS cluster
   - Network connectivity from edge VM to cluster API server (port 443)
 - **Azure Authentication & Permissions:**
-  - The user account (when using `az login`) or service principal (when configured in config file) needs permissions to register the edge node with Azure Arc and to assign the Arc managed identity the necessary RBAC permissions for AKS cluster access
+  - The user account or service principal needs the following permissions:
+    - **Arc Registration:** `Azure Connected Machine Onboarding` role on the resource group
+    - **RBAC Assignment:** `User Access Administrator` or `Owner` role on the AKS cluster to assign roles to the Arc managed identity
+    - **AKS Access:** `Azure Kubernetes Service Cluster Admin Role` on the target AKS cluster
 
-### 1. Authenticate with Azure
-```bash
-# Login with an account that has necessary permissions
-az login
-```
+### 1. Prepare Azure Authentication
+No manual login required - the bootstrap process will automatically prompt for Azure authentication when needed if you haven't already logged in or if your token has expired.
 
 ### 2. Build and Install
 ```bash
@@ -73,8 +73,11 @@ az login
 git clone <repository-url>
 cd AKSFlexNode
 
-# Build the binary
-go build -o aks-flex-node .
+# Build using Makefile (recommended)
+make build
+
+# Or build directly with Go
+go build .
 
 # Install system-wide
 sudo cp aks-flex-node /usr/local/bin/
@@ -125,6 +128,13 @@ EOF
 - `your-resource-group`: Resource group where Arc machine and AKS cluster are located
 - `your-cluster`: Your AKS cluster name
 
+### 4. Verify Configuration
+```bash
+# Test the configuration file syntax
+aks-flex-node version --config /etc/aks-flex-node/config.json
+
+```
+
 ### 5. Bootstrap the Node
 ```bash
 # Transform your VM into an AKS node
@@ -144,7 +154,7 @@ az connectedmachine list --resource-group your-resource-group
 
 ### 🛠️ Development Mode
 **Best for:** Testing, development, and one-off deployments
-**Authentication:** Uses Azure CLI credentials from the user who installed the service
+**Authentication:** Uses Azure CLI credentials with interactive login prompts when needed
 
 ```bash
 # Bootstrap with explicit config path (uses Azure CLI credentials)
@@ -154,7 +164,10 @@ aks-flex-node bootstrap --config /etc/aks-flex-node/config.json
 aks-flex-node unbootstrap --config /etc/aks-flex-node/config.json
 ```
 
-**Note:** The service automatically gains access to Azure CLI credentials during installation. Make sure you've run `az login` before installing the service.
+**Authentication Flow:**
+- If you haven't run `az login` or your token is expired, the bootstrap process will automatically prompt you to login interactively (if Service Pinciple isn't configured)
+- The login prompt will appear in your terminal with device code authentication when needed
+- Once authenticated, the service will use your Azure CLI credentials for all operations
 
 ### 🏭 Production Mode
 **Best for:** Automated deployments and production environments
@@ -175,6 +188,12 @@ Add service principal credentials to your config file:
   }
 }
 ```
+
+**Service Principal Permissions:**
+The service principal must have the same permissions listed in the Prerequisites section:
+- `Azure Connected Machine Onboarding` role on the resource group
+- `User Access Administrator` or `Owner` role on the AKS cluster
+- `Azure Kubernetes Service Cluster Admin Role` on the target AKS cluster
 
 ```bash
 # Install and enable systemd services
@@ -198,6 +217,24 @@ sudo ./AKSFlexNode/uninstall-service.sh
 | `bootstrap` | Transform VM into AKS node | `sudo aks-flex-node bootstrap` |
 | `unbootstrap` | Clean removal of all components | `sudo aks-flex-node unbootstrap` |
 | `version` | Show version information | `sudo aks-flex-node version` |
+
+## Build Targets
+
+The project includes a Makefile with essential build targets:
+
+```bash
+# Build the application
+make build
+
+# Run all tests
+make test
+
+# Clean build artifacts
+make clean
+
+# Show build metadata (date and git commit)
+make update-build-metadata
+```
 
 ## System Requirements
 

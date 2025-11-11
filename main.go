@@ -48,6 +48,11 @@ func main() {
 
 	// Set up persistent pre-run to initialize config and logger
 	rootCmd.PersistentPreRunE = func(cmd *cobra.Command, args []string) error {
+		// Skip config loading for version command
+		if cmd.Name() == "version" {
+			return nil
+		}
+
 		// Load config if specified
 		cfg, err := config.LoadConfig(configPath)
 		if err != nil {
