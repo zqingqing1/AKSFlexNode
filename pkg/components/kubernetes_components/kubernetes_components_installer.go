@@ -41,11 +41,10 @@ func (i *Installer) Execute(ctx context.Context) error {
 
 	// Determine CPU architecture
 	cpuArch := runtime.GOARCH
-	if cpuArch == "amd64" {
-		cpuArch = "amd64"
-	} else if cpuArch == "arm64" {
-		cpuArch = "arm64"
-	} else {
+	switch cpuArch {
+	case "amd64", "arm64":
+		// Supported architectures - use as is
+	default:
 		return fmt.Errorf("unsupported CPU architecture: %s", cpuArch)
 	}
 	i.logger.Infof("Detected CPU architecture: %s", cpuArch)
@@ -55,7 +54,9 @@ func (i *Installer) Execute(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("failed to create temporary directory: %w", err)
 	}
-	defer os.RemoveAll(tempDir)
+	defer func() {
+		_ = os.RemoveAll(tempDir)
+	}()
 
 	// Construct download URL
 	url := fmt.Sprintf(i.config.Kubernetes.URLTemplate, i.config.Kubernetes.Version, cpuArch)
@@ -82,7 +83,9 @@ func (i *Installer) Execute(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("failed to get current directory: %w", err)
 	}
-	defer os.Chdir(originalDir)
+	defer func() {
+		_ = os.Chdir(originalDir)
+	}()
 
 	if err := os.Chdir(tempDir); err != nil {
 		return fmt.Errorf("failed to change to temp directory: %w", err)
@@ -134,7 +137,7 @@ func (i *Installer) Execute(ctx context.Context) error {
 
 	// Verify installation
 	if err := i.validateKubernetesInstallation(binaries); err != nil {
-		return fmt.Errorf("Kubernetes installation validation failed: %w", err)
+		return fmt.Errorf("kubernetes installation validation failed: %w", err)
 	}
 
 	i.logger.Infof("Kubernetes components version %s installed successfully", i.config.Kubernetes.Version)
@@ -198,7 +201,7 @@ func (i *Installer) validateKubernetesInstallation(binaries []string) error {
 
 		// Check if binary exists
 		if !utils.FileExists(binaryPath) {
-			return fmt.Errorf("Kubernetes binary not found after installation: %s", binary)
+			return fmt.Errorf("kubernetes binary not found after installation: %s", binary)
 		}
 
 		// Check if binary is executable - use appropriate version command for each binary
@@ -215,7 +218,7 @@ func (i *Installer) validateKubernetesInstallation(binaries []string) error {
 		}
 
 		if err := utils.RunSystemCommand(binaryPath, args...); err != nil {
-			return fmt.Errorf("Kubernetes binary %s is not executable or functional: %w", binary, err)
+			return fmt.Errorf("kubernetes binary %s is not executable or functional: %w", binary, err)
 		}
 
 		i.logger.Debugf("Verified Kubernetes component: %s", binary)

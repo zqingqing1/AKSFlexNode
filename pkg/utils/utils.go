@@ -208,20 +208,20 @@ func CreateTempFile(pattern string, content []byte) (*os.File, error) {
 	}
 
 	if _, err := tempFile.Write(content); err != nil {
-		tempFile.Close()
-		os.Remove(tempFile.Name())
+		_ = tempFile.Close()
+		_ = os.Remove(tempFile.Name())
 		return nil, fmt.Errorf("failed to write to temporary file: %w", err)
 	}
 
 	if err := tempFile.Close(); err != nil {
-		os.Remove(tempFile.Name())
+		_ = os.Remove(tempFile.Name())
 		return nil, fmt.Errorf("failed to close temporary file: %w", err)
 	}
 
 	// Reopen for reading
 	reopened, err := os.Open(tempFile.Name())
 	if err != nil {
-		os.Remove(tempFile.Name())
+		_ = os.Remove(tempFile.Name())
 		return nil, fmt.Errorf("failed to reopen temporary file: %w", err)
 	}
 
@@ -247,8 +247,8 @@ func WriteFileAtomic(filename string, data []byte, perm os.FileMode) error {
 
 	tmpPath := tmpFile.Name()
 	defer func() {
-		tmpFile.Close()
-		os.Remove(tmpPath) // Clean up temp file on error
+		_ = tmpFile.Close()
+		_ = os.Remove(tmpPath) // Clean up temp file on error
 	}()
 
 	// Write data to temporary file
@@ -292,7 +292,7 @@ func WriteFileAtomicSystem(filename string, data []byte, perm os.FileMode) error
 		defer CleanupTempFile(tempFile.Name())
 
 		// Close the temp file before sudo operations
-		tempFile.Close()
+		_ = tempFile.Close()
 
 		// Create temporary file in target directory using sudo
 		tempPath := filename + ".tmp"
@@ -389,7 +389,9 @@ func DownloadFile(url, destination string) error {
 	if err != nil {
 		return fmt.Errorf("failed to download from %s: %w", url, err)
 	}
-	defer resp.Body.Close()
+	defer func() {
+		_ = resp.Body.Close()
+	}()
 
 	if resp.StatusCode != http.StatusOK {
 		return fmt.Errorf("download failed with status %d for %s", resp.StatusCode, url)
@@ -400,7 +402,9 @@ func DownloadFile(url, destination string) error {
 	if err != nil {
 		return fmt.Errorf("failed to create file %s: %w", destination, err)
 	}
-	defer out.Close()
+	defer func() {
+		_ = out.Close()
+	}()
 
 	// Copy response body to file
 	_, err = io.Copy(out, resp.Body)

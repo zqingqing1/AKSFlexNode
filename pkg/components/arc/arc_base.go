@@ -11,7 +11,6 @@ import (
 
 	"go.goms.io/aks/AKSFlexNode/pkg/auth"
 	"go.goms.io/aks/AKSFlexNode/pkg/config"
-	"go.goms.io/aks/AKSFlexNode/pkg/utils"
 )
 
 // RoleAssignment represents a role assignment configuration
@@ -170,15 +169,6 @@ func (ab *Base) createRoleAssignmentsClient(ctx context.Context) (*armauthorizat
 	}
 
 	return client, nil
-}
-
-func (ab *Base) cleanUpARCAgent() error {
-	if err := utils.RunSystemCommand("dpkg", "--remove", "--force-remove-reinstreq", "azcmagent"); err != nil {
-		ab.logger.Warnf("Failed to remove broken azcmagent package: %v", err)
-		return err
-	}
-	ab.logger.Info("Successfully removed broken Arc agent package (if any existed).")
-	return nil
 }
 
 func (ab *Base) ensureAuthentication(ctx context.Context) error {

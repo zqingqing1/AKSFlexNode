@@ -36,7 +36,7 @@ func (u *UnInstaller) Execute(ctx context.Context) error {
 
 	// Ensure authentication
 	if err := u.ensureAuthentication(ctx); err != nil {
-		return fmt.Errorf("Arc bootstrap setup failed at authentication: %w", err)
+		return fmt.Errorf("arc bootstrap setup failed at authentication: %w", err)
 	}
 
 	// Track cleanup operations that failed

@@ -48,7 +48,9 @@ func (ci *Installer) Execute(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("failed to create temporary directory: %w", err)
 	}
-	defer os.RemoveAll(tempDir)
+	defer func() {
+		_ = os.RemoveAll(tempDir)
+	}()
 
 	tarFile := filepath.Join(tempDir, fmt.Sprintf("containerd-%s-linux-amd64.tar.gz", ci.config.Containerd.Version))
 	extractDir := filepath.Join(tempDir, "extract")

@@ -45,14 +45,14 @@ func (i *Installer) Execute(ctx context.Context) error {
 
 	// Ensure authentication
 	if err := i.ensureAuthentication(ctx); err != nil {
-		return fmt.Errorf("Arc bootstrap setup failed at authentication: %w", err)
+		return fmt.Errorf("arc bootstrap setup failed at authentication: %w", err)
 	}
 
 	// Step 1: Validate Arc agent is available
 	i.logger.Info("Step 1: Validating Arc agent availability")
 	if err := i.validateArcAgent(ctx); err != nil {
 		i.logger.Errorf("Arc agent validation failed: %v", err)
-		return fmt.Errorf("Arc bootstrap setup failed at agent validation: %w", err)
+		return fmt.Errorf("arc bootstrap setup failed at agent validation: %w", err)
 	}
 	i.logger.Info("Arc agent validation successful")
 
@@ -61,7 +61,7 @@ func (i *Installer) Execute(ctx context.Context) error {
 	machine, err := i.registerArcMachine(ctx)
 	if err != nil {
 		i.logger.Errorf("Failed to register Arc machine: %v", err)
-		return fmt.Errorf("Arc bootstrap setup failed at machine registration: %w", err)
+		return fmt.Errorf("arc bootstrap setup failed at machine registration: %w", err)
 	}
 	i.logger.Info("Successfully registered Arc machine with Azure")
 
@@ -72,7 +72,7 @@ func (i *Installer) Execute(ctx context.Context) error {
 		time.Sleep(10 * time.Second)
 		if err := i.assignRBACRoles(ctx, machine); err != nil {
 			i.logger.Errorf("Failed to assign RBAC roles: %v", err)
-			return fmt.Errorf("Arc bootstrap setup failed at RBAC role assignment: %w", err)
+			return fmt.Errorf("arc bootstrap setup failed at RBAC role assignment: %w", err)
 		}
 		i.logger.Info("Successfully assigned RBAC roles")
 	} else {
@@ -94,7 +94,7 @@ func (i *Installer) Execute(ctx context.Context) error {
 	i.logger.Info("Step 4: Waiting for RBAC permissions to become effective")
 	if err := i.waitForRBACPermissions(ctx, machine); err != nil {
 		i.logger.Errorf("Failed while waiting for RBAC permissions: %v", err)
-		return fmt.Errorf("Arc bootstrap setup failed while waiting for RBAC permissions: %w", err)
+		return fmt.Errorf("arc bootstrap setup failed while waiting for RBAC permissions: %w", err)
 	}
 	i.logger.Info("RBAC permissions are now effective")
 
@@ -126,7 +126,7 @@ func (i *Installer) IsCompleted(ctx context.Context) bool {
 // validateArcAgent ensures Arc agent is available (should be installed by install.sh)
 func (i *Installer) validateArcAgent(ctx context.Context) error {
 	if !isArcAgentInstalled() {
-		return fmt.Errorf("Azure Arc agent not found - please run the installation script first:\n" +
+		return fmt.Errorf("azure Arc agent not found - please run the installation script first:\n" +
 			"curl -fsSL https://raw.githubusercontent.com/Azure/AKSFlexNode/main/scripts/install.sh | bash")
 	}
 	i.logger.Info("Azure Arc agent found and ready")
@@ -156,7 +156,7 @@ func (i *Installer) registerArcMachine(ctx context.Context) (*armhybridcompute.M
 	// Verify registration by retrieving the machine
 	machine, err = i.getArcMachine(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("Arc agent registration completed but failed to retrieve machine info: %w", err)
+		return nil, fmt.Errorf("arc agent registration completed but failed to retrieve machine info: %w", err)
 	}
 
 	i.logger.Info("Arc machine registration completed successfully")
@@ -311,7 +311,7 @@ func (i *Installer) assignRole(ctx context.Context, client *armauthorization.Rol
 			return nil
 		}
 		if strings.Contains(errStr, "PrincipalNotFound") {
-			return fmt.Errorf("Arc managed identity not found - ensure Arc machine is properly registered: %w", err)
+			return fmt.Errorf("arc managed identity not found - ensure Arc machine is properly registered: %w", err)
 		}
 
 		return fmt.Errorf("failed to create role assignment: %w", err)
