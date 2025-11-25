@@ -258,7 +258,9 @@ func TestLoadConfig(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to create temp dir: %v", err)
 	}
-	defer os.RemoveAll(tempDir)
+	defer func() {
+		_ = os.RemoveAll(tempDir)
+	}()
 
 	tests := []struct {
 		name       string
@@ -318,19 +320,14 @@ func TestLoadConfig(t *testing.T) {
 				if err == nil {
 					t.Errorf("LoadConfig() expected error but got none")
 				}
-				if tt.errMsg != "" && err != nil && err.Error() != tt.errMsg {
-					// For partial match on error messages
-					if tt.errMsg != "" {
-						// Allow partial matching for complex error messages
-						// This is useful when we just want to check the error type
-					}
-				}
+				// Just verify we got an error, don't check specific message
 			} else {
 				if err != nil {
 					t.Errorf("LoadConfig() unexpected error = %v", err)
 				}
 				if config == nil {
 					t.Errorf("LoadConfig() returned nil config")
+					return
 				}
 
 				// Verify defaults were applied

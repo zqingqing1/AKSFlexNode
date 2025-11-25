@@ -215,7 +215,7 @@ func (i *Installer) isDirectoryUsable(dir string) bool {
 	}
 
 	// Clean up the test file
-	os.Remove(tempFile)
+	_ = os.Remove(tempFile)
 	return true
 }
 

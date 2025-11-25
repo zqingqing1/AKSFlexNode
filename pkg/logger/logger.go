@@ -230,7 +230,7 @@ func createLogFileIfNotExists(logFilePath string) error {
 		// Try direct file creation with appropriate permissions
 		file, err := os.OpenFile(logFilePath, os.O_CREATE|os.O_WRONLY, 0644)
 		if err == nil {
-			file.Close()
+			_ = file.Close()
 			return nil
 		}
 		// If direct creation fails, fall through to the system method

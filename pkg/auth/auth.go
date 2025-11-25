@@ -84,13 +84,13 @@ func (a *AuthProvider) CheckCLIAuthStatus(ctx context.Context) error {
 	// Try to get account information - this will fail if not logged in or token expired
 	cmd := exec.CommandContext(ctx, "az", "account", "show", "--output", "json")
 	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("Azure CLI authentication check failed: %w", err)
+		return fmt.Errorf("azure CLI authentication check failed: %w", err)
 	}
 
 	// Try to get an access token to verify it's not expired
 	cmd = exec.CommandContext(ctx, "az", "account", "get-access-token", "--output", "json")
 	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("Azure CLI token validation failed: %w", err)
+		return fmt.Errorf("azure CLI token validation failed: %w", err)
 	}
 
 	return nil
