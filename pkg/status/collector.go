@@ -13,6 +13,7 @@ import (
 
 	"github.com/sirupsen/logrus"
 	"go.goms.io/aks/AKSFlexNode/pkg/config"
+	"go.goms.io/aks/AKSFlexNode/pkg/utils"
 )
 
 // Collector collects system and node status information
@@ -47,6 +48,12 @@ func (c *Collector) CollectStatus(ctx context.Context) (*NodeStatus, error) {
 
 	// Check if kubelet is running
 	status.KubeletRunning = c.isKubeletRunning(ctx)
+
+	// Check if kubelet is ready
+	status.KubeletReady = c.isKubeletReady(ctx)
+
+	// check if containerd is running, it will cause kubelet not ready
+	status.ContainerdRunning = c.isContainerdRunning(ctx)
 
 	// Get runc version
 	version, err = c.getRuncVersion(ctx)
@@ -182,6 +189,55 @@ func (c *Collector) isKubeletRunning(ctx context.Context) bool {
 		return strings.TrimSpace(output) == "active"
 	}
 	return false
+}
+
+func (c *Collector) isContainerdRunning(ctx context.Context) bool {
+	if output, err := c.runCommand(ctx, "systemctl", "is-active", "containerd"); err == nil {
+		return strings.TrimSpace(output) == "active"
+	}
+	return false
+}
+
+// isKubeletReady checks if the kubelet reports the node as Ready
+func (c *Collector) isKubeletReady(ctx context.Context) string {
+	hostname, err := c.runCommand(ctx, "hostname")
+	if err != nil {
+		c.logger.Warnf("Failed to get hostname: %v", err)
+		return "Unknown"
+	}
+	hostname = strings.TrimSpace(hostname)
+	if hostname == "" {
+		c.logger.Warn("Hostname is empty")
+		return "Unknown"
+	}
+
+	// Readiness condition status is one of: True, False, Unknown
+	args := []string{
+		"--kubeconfig",
+		"/var/lib/kubelet/kubeconfig",
+		"get",
+		"node",
+		hostname,
+		"-o",
+		"jsonpath={.status.conditions[?(@.type==\"Ready\")].status}",
+	}
+
+	output, err := utils.RunCommandWithOutput("kubectl", args...)
+	if err != nil {
+		// Common in dev: agent runs as ubuntu and can't read root:aks-flex-node 0640 kubeconfig.
+		// Retry with sudo (non-interactive) if we see a permissions failure.
+		c.logger.Errorf("kubectl command failed: %v with output: %s", err, output)
+		return "Unknown"
+	}
+
+	switch strings.TrimSpace(output) {
+	case "True":
+		return "Ready"
+	case "False":
+		return "NotReady"
+	default:
+		return "Unknown"
+	}
 }
 
 // NeedsBootstrap checks if the node needs to be (re)bootstrapped based on status file

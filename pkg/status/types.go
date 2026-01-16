@@ -11,7 +11,9 @@ type NodeStatus struct {
 	RuncVersion    string `json:"runcVersion"`
 
 	// Service status
-	KubeletRunning bool `json:"kubeletRunning"`
+	KubeletRunning    bool   `json:"kubeletRunning"`
+	KubeletReady      string `json:"kubeletReady"`
+	ContainerdRunning bool   `json:"containerdRunning"`
 
 	// Azure Arc status
 	ArcStatus ArcStatus `json:"arcStatus"`
