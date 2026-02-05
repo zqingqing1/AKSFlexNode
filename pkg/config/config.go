@@ -196,12 +196,41 @@ func (c *Config) setNpdDefaults() {
 // Pattern is case insensitive to handle variations in Azure resource path casing
 var AKSClusterResourceIDPattern = regexp.MustCompile(`(?i)^/subscriptions/([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})/resourcegroups/([a-zA-Z0-9_\-\.]+)/providers/microsoft\.containerservice/managedclusters/([a-zA-Z0-9_\-\.]+)$`)
 
+// BootstrapTokenPattern is the regex pattern for Kubernetes bootstrap tokens
+// Format: <token-id>.<token-secret> where token-id is 6 chars [a-z0-9] and token-secret is 16 chars [a-z0-9]
+var BootstrapTokenPattern = regexp.MustCompile(`^[a-z0-9]{6}\.[a-z0-9]{16}$`)
+
 // validateAzureResourceID validates the format of an AKS cluster resource ID using regex pattern matching
 func validateAzureResourceID(resourceID string) error {
 	// Check AKS cluster resource ID format
 	if !AKSClusterResourceIDPattern.MatchString(resourceID) {
 		return fmt.Errorf("invalid AKS cluster resource ID format. Expected format:" +
 			"/subscriptions/{subscription-id}/resourceGroups/{resource-group}/providers/Microsoft.ContainerService/managedClusters/{cluster-name}")
+	}
+
+	return nil
+}
+
+// validateBootstrapToken validates the bootstrap token configuration
+func validateBootstrapToken(cfg *Config) error {
+	tokenCfg := cfg.Azure.BootstrapToken
+	if tokenCfg == nil {
+		return fmt.Errorf("bootstrap token configuration is nil")
+	}
+
+	// Validate token format
+	if !BootstrapTokenPattern.MatchString(tokenCfg.Token) {
+		return fmt.Errorf("invalid bootstrap token format. Expected format: <token-id>.<token-secret> " +
+			"where token-id is 6 lowercase alphanumeric characters and token-secret is 16 lowercase alphanumeric characters")
+	}
+
+	// When using bootstrap token, serverURL and caCertData are required in kubelet config
+	// because there's no Azure authentication to fetch them
+	if cfg.Node.Kubelet.ServerURL == "" {
+		return fmt.Errorf("node.kubelet.serverURL is required when using bootstrap token authentication")
+	}
+	if cfg.Node.Kubelet.CACertData == "" {
+		return fmt.Errorf("node.kubelet.caCertData is required when using bootstrap token authentication")
 	}
 
 	return nil
@@ -252,10 +281,33 @@ func (c *Config) Validate() error {
 		return fmt.Errorf("invalid agent.logLevel: %s. Valid values are: debug, info, warning, error", c.Agent.LogLevel)
 	}
 
-	// Validate authentication configuration - Arc and MSI cannot coexist
-	if c.IsARCEnabled() && c.IsMIConfigured() {
-		return fmt.Errorf("invalid configuration: Arc and ManagedIdentity cannot be configured together. " +
-			"Choose either Arc (with arc.enabled: true) or ManagedIdentity (with managedIdentity config), but not both")
+	// Validate authentication configuration - ensure mutual exclusivity
+	authMethodCount := 0
+	if c.IsARCEnabled() {
+		authMethodCount++
+	}
+	if c.IsSPConfigured() {
+		authMethodCount++
+	}
+	if c.IsMIConfigured() {
+		authMethodCount++
+	}
+	if c.IsBootstrapTokenConfigured() {
+		authMethodCount++
+	}
+
+	if authMethodCount == 0 {
+		return fmt.Errorf("at least one authentication method must be configured: Arc, Service Principal, Managed Identity, or Bootstrap Token")
+	}
+	if authMethodCount > 1 {
+		return fmt.Errorf("only one authentication method can be enabled at a time: Arc, Service Principal, Managed Identity, or Bootstrap Token")
+	}
+
+	// Validate bootstrap token if configured
+	if c.IsBootstrapTokenConfigured() {
+		if err := validateBootstrapToken(c); err != nil {
+			return fmt.Errorf("invalid bootstrap token configuration: %w", err)
+		}
 	}
 
 	return nil

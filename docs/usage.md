@@ -1,24 +1,25 @@
 # AKS Flex Node Usage Guide
 
-This guide provides two complete deployment paths for AKS Flex Node:
+This guide provides three complete setup paths for AKS Flex Node:
 
 1. **[Setup with Azure Arc](#setup-with-azure-arc)** - Easier setup for quick start, plug and play
-2. **[Setup with Service Principal](#setup-with-service-principal)** - More scalable for production deployments
+2. **[Setup with Service Principal](#setup-with-service-principal)** - More scalable for secure production environment
+3. **[Setup with Bootstrap Token](#setup-with-bootstrap-token)** - Simplest setup with minimum dependancy for dynamic hyperscale environments
 
-## Comparison: Arc vs Service Principal
+## Comparison: Arc vs Service Principal vs Bootstrap Token
 
 Use this comparison to choose the deployment path that best fits your requirements:
 
-| Feature | With Azure Arc | With Service Principal |
-|---------|---------------|----------------------|
-| **Setup Complexity** | Simple (plug and play) | Moderate (requires SP setup) |
-| **Scalability** | Limited (Arc overhead per node) | High (lightweight, efficient) |
-| **Credential Management** | Automatic (managed identity) | Manual (SP rotation) |
-| **Azure Visibility** | Full (Arc resource in portal) | Limited (just node) |
-| **Authentication** | Managed identity + auto-rotation | Static SP credentials |
-| **Required Permissions** | More (Arc + RBAC + AKS) | Less (AKS only) |
-| **Performance** | Higher overhead (Arc agent) | Lower overhead (direct auth) |
-| **Use Case** | Quick start, demos, small scale | Production, large scale |
+| Feature | With Azure Arc | With Service Principal | With Bootstrap Token |
+|---------|---------------|----------------------|---------------------|
+| **Setup Complexity** | Simple (plug and play) | Moderate (requires SP setup) | Very simple (just token) |
+| **Scalability** | Low (Arc overhead per node) | High (lightweight, efficient) | Highest (minimal overhead) |
+| **Credential Management** | Automatic (managed identity) | Manual (SP rotation) | Manual (token rotation) |
+| **Azure Visibility** | Full (Arc resource in portal) | Limited (just node) | Limited (just node) |
+| **Authentication** | Managed identity + auto-rotation | Static SP credentials | Bootstrap token (time-limited) |
+| **Required Permissions** | More (Arc + RBAC + AKS) | Less (AKS only) | Minimal (token creation) |
+| **Performance** | Higher overhead (Arc agent) | Lower overhead (direct auth) | Minimum overhead |
+| **Use Case** | Quick start, demos, small scale | Production, large scale | Dynamic, hyperscale |
 
 ---
 
@@ -367,6 +368,238 @@ kubectl describe node <node-name>
 
 ---
 
+## Setup with Bootstrap Token
+
+Use this approach for temporary setup, hyperscale environments. Bootstrap tokens are native Kubernetes authentication tokens with configurable time-to-live (TTL), making them ideal for short-lived nodes.
+
+**Why Bootstrap Tokens?**
+- **Simplest setup** - No Azure Arc registration needed
+- **Native Kubernetes** - Uses standard K8s authentication (TLS bootstrapping)
+- **Time-limited** - Tokens expire automatically after configured TTL
+- **Quick provisioning** - Generate tokens with minimal dependencies
+
+### Cluster Setup
+
+Create an AKS cluster with Azure AD enabled:
+
+```bash
+# Create AKS cluster
+MY_USER_ID=$(az ad signed-in-user show --query id -o tsv)
+RESOURCE_GROUP="your-resource-group"
+CLUSTER_NAME="your-cluster-name"
+az aks create \
+    --resource-group "$RESOURCE_GROUP" \
+    --name "$CLUSTER_NAME" \
+    --enable-aad \
+    --aad-admin-group-object-ids "$MY_USER_ID"
+```
+
+### Bootstrap Token Creation
+
+Create a bootstrap token by creating a Kubernetes secret:
+
+```bash
+# Get cluster credentials
+az aks get-credentials \
+    --resource-group "$RESOURCE_GROUP" \
+    --name "$CLUSTER_NAME" \
+    --admin \
+    --overwrite-existing
+
+# Generate a valid bootstrap token (format: 6 chars . 16 chars)
+TOKEN_ID=$(openssl rand -hex 3)
+TOKEN_SECRET=$(openssl rand -hex 8)
+BOOTSTRAP_TOKEN="${TOKEN_ID}.${TOKEN_SECRET}"
+
+# Set expiration (e.g., 24 hours from now)
+EXPIRATION=$(date -u -d "+24 hours" +"%Y-%m-%dT%H:%M:%SZ")
+
+# Create the bootstrap token secret
+kubectl apply -f - <<EOF
+apiVersion: v1
+kind: Secret
+metadata:
+  name: bootstrap-token-${TOKEN_ID}
+  namespace: kube-system
+type: bootstrap.kubernetes.io/token
+stringData:
+  description: "AKS Flex Node bootstrap token"
+  token-id: "${TOKEN_ID}"
+  token-secret: "${TOKEN_SECRET}"
+  expiration: "${EXPIRATION}"
+  usage-bootstrap-authentication: "true"
+  usage-bootstrap-signing: "true"
+  auth-extra-groups: "system:bootstrappers:aks-flex-node"
+EOF
+```
+
+**Important Notes:**
+- Token format must be exactly 6 + 16 lowercase alphanumeric characters (total: 23 chars with dot)
+- The secret must be in the `kube-system` namespace
+- The secret type must be `bootstrap.kubernetes.io/token`
+- Secret name must be `bootstrap-token-<token-id>`
+- Bootstrap tokens follow the [Kubernetes bootstrap token specification](https://kubernetes.io/docs/reference/access-authn-authz/bootstrap-tokens/)
+
+### Configure RBAC Roles
+
+Apply the necessary Kubernetes RBAC roles for bootstrap token authentication:
+
+```bash
+# Create node bootstrapper role binding
+kubectl apply -f - <<EOF
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: aks-flex-node-bootstrapper
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: system:node-bootstrapper
+subjects:
+- apiGroup: rbac.authorization.k8s.io
+  kind: Group
+  name: system:bootstrappers:aks-flex-node
+EOF
+
+# Create node role binding for kubelet certificate creation
+kubectl apply -f - <<EOF
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: aks-flex-node-auto-approve-csr
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: system:certificates.k8s.io:certificatesigningrequests:nodeclient
+subjects:
+- apiGroup: rbac.authorization.k8s.io
+  kind: Group
+  name: system:bootstrappers:aks-flex-node
+EOF
+```
+
+### Installation
+
+```bash
+# Install aks-flex-node
+curl -fsSL https://raw.githubusercontent.com/Azure/AKSFlexNode/main/scripts/install.sh | sudo bash
+
+# Verify installation
+aks-flex-node version
+```
+
+### Configuration
+
+Create the configuration file with Bootstrap Token:
+
+```bash
+# Get subscription ID and cluster resource ID
+TENANT_ID=$(az account show --query tenantId -o tsv)
+SUBSCRIPTION=$(az account show --query id -o tsv)
+AKS_RESOURCE_ID=$(az aks show \
+    --resource-group "$RESOURCE_GROUP" \
+    --name "$CLUSTER_NAME" \
+    --query "id" \
+    --output tsv)
+LOCATION=$(az aks show \
+    --resource-group "$RESOURCE_GROUP" \
+    --name "$CLUSTER_NAME" \
+    --query "location" \
+    --output tsv)
+
+SERVER_URL=$(kubectl config view --minify -o jsonpath='{.clusters[0].cluster.server}')
+CA_CERT_DATA=$(kubectl config view --minify --raw -o jsonpath='{.clusters[0].cluster.certificate-authority-data}')
+```
+
+# Create config file (with bootstrap token)
+sudo tee /etc/aks-flex-node/config.json > /dev/null <<EOF
+{
+  "azure": {
+    "subscriptionId": "$SUBSCRIPTION",
+    "tenantId": "$TENANT_ID",
+    "cloud": "AzurePublicCloud",
+    "bootstrapToken": {
+      "token": "$BOOTSTRAP_TOKEN",
+      "serverURL": "$SERVER_URL",
+      "caCertData": "$CA_CERT_DATA"
+    },
+    "arc": {
+      "enabled": false
+    },
+    "targetCluster": {
+      "resourceId": "$AKS_RESOURCE_ID",
+      "location": "$LOCATION"
+    }
+  },
+  "kubernetes": {
+    "version": "1.30.0"
+  },
+  "agent": {
+    "logLevel": "info",
+    "logDir": "/var/log/aks-flex-node"
+  }
+}
+EOF
+### Running the Agent
+
+```bash
+# Direct execution
+aks-flex-node agent --config /etc/aks-flex-node/config.json
+
+# Or using systemd
+sudo systemctl enable --now aks-flex-node-agent
+journalctl -u aks-flex-node-agent -f
+```
+
+### Verification
+
+After bootstrap completes, verify the node joined the cluster:
+
+```bash
+kubectl get nodes
+
+# Check node details
+kubectl describe node <node-name>
+```
+
+### How It Works
+
+Bootstrap token authentication follows the [Kubernetes TLS Bootstrapping](https://kubernetes.io/docs/reference/access-authn-authz/kubelet-tls-bootstrapping/) process:
+
+1. **Token Creation**: A bootstrap token secret is created in the `kube-system` namespace with proper RBAC bindings
+2. **Initial Authentication**: The node uses the bootstrap token to authenticate to the Kubernetes API server
+3. **Certificate Request**: Kubelet generates a private key and submits a Certificate Signing Request (CSR) to the cluster
+4. **Certificate Approval**: The CSR is automatically approved through the configured RBAC roles
+5. **Certificate Issuance**: The cluster issues a signed client certificate for the kubelet
+6. **Ongoing Authentication**: After bootstrap, kubelet uses its client certificate for all future API requests
+7. **Token Expiration**: The bootstrap token expires after the configured TTL, but the node continues to use its certificate
+
+This approach is more secure than long-lived credentials because:
+- Bootstrap tokens are short-lived (typically 24 hours to 7 days)
+- After successful bootstrap, the token is no longer needed
+- Ongoing authentication uses auto-rotating kubelet certificates (rotated by kubelet automatically)
+- Each node gets its own unique client certificate
+- No manual credential rotation required after initial bootstrap
+
+### Token vs Certificate Lifecycle
+
+#### Bootstrap Token (One-Time Use)
+- **Purpose**: Initial node authentication only
+- **Usage**: Used once during node bootstrap
+- **Expiration**: Token expires after configured TTL
+- **Rotation**: Not needed - token is no longer used after successful bootstrap
+
+#### Kubelet Certificates (Auto-Rotated)
+- **Purpose**: Ongoing node authentication after bootstrap
+- **Usage**: Used for all API server communication
+- **Expiration**: Typically valid for ~1 year
+- **Rotation**: **Automatically rotated by kubelet** before expiration
+
+**Key Point:** Once a node successfully bootstraps:
+1. The bootstrap token is no longer needed (can expire safely)
+2. The node uses a client certificate for all future authentication
+3. Kubelet automatically rotates this certificate (built-in feature since Kubernetes 1.8+)
+
 ## Common Operations
 
 ### Available Commands
@@ -451,6 +684,26 @@ az login --service-principal \
 az aks show \
     --resource-group $RESOURCE_GROUP \
     --name $CLUSTER_NAME
+```
+
+### Bootstrap Token Mode Issues
+
+```bash
+# Verify bootstrap token exists and is valid
+kubectl get secret -n kube-system | grep bootstrap-token
+
+# Check bootstrap token details (decode base64 values)
+kubectl get secret bootstrap-token-<token-id> -n kube-system -o yaml
+
+# Verify RBAC bindings
+kubectl get clusterrolebinding aks-flex-node-bootstrapper
+kubectl get clusterrolebinding aks-flex-node-auto-approve-csr
+
+# Check certificate signing requests
+kubectl get csr
+
+# Approve pending CSR if needed
+kubectl certificate approve <csr-name>
 ```
 
 ### Kubelet Issues

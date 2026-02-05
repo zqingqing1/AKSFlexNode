@@ -3,6 +3,7 @@ package kubelet
 import (
 	"context"
 	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 
@@ -38,6 +39,7 @@ func (i *Installer) GetName() string {
 // Execute installs and configures kubelet service
 func (i *Installer) Execute(ctx context.Context) error {
 	i.logger.Info("Installing and configuring kubelet")
+
 	// Set up mc client for getting cluster info
 	if err := i.setUpClients(); err != nil {
 		return fmt.Errorf("failed to set up Azure SDK clients: %w", err)
@@ -91,14 +93,23 @@ func (i *Installer) configure(ctx context.Context) error {
 		return err
 	}
 
-	// Create token script for exec credential authentication (Arc or Service Principal)
-	if err := i.createTokenScript(); err != nil {
-		return err
-	}
+	// Create authentication configuration based on auth method
+	if i.config.IsBootstrapTokenConfigured() {
+		// Bootstrap token authentication uses a simple token-based kubeconfig
+		if err := i.createKubeconfigWithBootstrapToken(ctx); err != nil {
+			return err
+		}
+	} else {
+		// Arc or Service Principal authentication uses exec credential provider
+		// Create token script for exec credential authentication (Arc or Service Principal)
+		if err := i.createTokenScript(); err != nil {
+			return err
+		}
 
-	// Create kubeconfig with exec credential provider
-	if err := i.createKubeconfigWithExecCredential(ctx); err != nil {
-		return err
+		// Create kubeconfig with exec credential provider
+		if err := i.createKubeconfigWithExecCredential(ctx); err != nil {
+			return err
+		}
 	}
 
 	// Create kubelet containerd configuration
@@ -222,6 +233,7 @@ KUBELET_FLAGS="\
   --read-only-port=0  \
   --resolv-conf=/run/systemd/resolve/resolv.conf  \
   --streaming-connection-idle-timeout=4h  \
+  --rotate-certificates=true \
   --tls-cipher-suites=TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256,TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256,TLS_ECDHE_ECDSA_WITH_CHACHA20_POLY1305,TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384,TLS_ECDHE_RSA_WITH_CHACHA20_POLY1305,TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384,TLS_RSA_WITH_AES_256_GCM_SHA384,TLS_RSA_WITH_AES_128_GCM_SHA256 \
   "`,
 		strings.Join(labels, ","),
@@ -319,8 +331,11 @@ func (i *Installer) createTokenScript() error {
 		return i.createMSITokenScript()
 	} else if i.config.IsSPConfigured() {
 		return i.createServicePrincipalTokenScript()
+	} else if i.config.IsBootstrapTokenConfigured() {
+		// Bootstrap token doesn't need a token script
+		return nil
 	} else {
-		return fmt.Errorf("no valid authentication method configured - either Arc, MSI, or Service Principal must be explicitly configured")
+		return fmt.Errorf("no valid authentication method configured - either Arc, MSI, Service Principal, or Bootstrap Token must be configured")
 	}
 }
 
@@ -492,11 +507,14 @@ func (i *Installer) writeTokenScript(tokenScript string) error {
 
 // createKubeconfigWithExecCredential creates kubeconfig with exec credential provider for authentication
 func (i *Installer) createKubeconfigWithExecCredential(ctx context.Context) error {
+	// Fetch cluster credentials from Azure (for Arc/SP/MI modes)
+	i.logger.Info("Fetching cluster credentials from Azure")
 	kubeconfig, err := i.getClusterCredentials(ctx)
 	if err != nil {
 		return fmt.Errorf("failed to get cluster credentials: %w", err)
 	}
 
+	// Extract server URL and CA cert from kubeconfig
 	serverURL, caCertData, err := utils.ExtractClusterInfo(kubeconfig)
 	if err != nil {
 		return fmt.Errorf("failed to extract cluster info from kubeconfig: %w", err)
@@ -561,6 +579,72 @@ users:
 	return nil
 }
 
+// createKubeconfigWithBootstrapToken  creates a kubeconfig file with bootstrap token authentication
+func (i *Installer) createKubeconfigWithBootstrapToken(ctx context.Context) error {
+	i.logger.Info("Creating bootstrap token kubeconfig")
+
+	// Use cluster info from kubelet config (required fields validated earlier)
+	serverURL := i.config.Node.Kubelet.ServerURL
+	caCertData := i.config.Node.Kubelet.CACertData
+	bootstrapToken := i.config.Azure.BootstrapToken.Token
+
+	// Get node hostname for audit logging
+	hostname, err := os.Hostname()
+	if err != nil {
+		return fmt.Errorf("failed to get hostname for bootstrap kubeconfig: %w", err)
+	}
+
+	// Include node name in username for better auditing in Kubernetes API server logs
+	username := fmt.Sprintf("kubelet-bootstrap-%s", hostname)
+
+	// Create cluster configuration based on whether we have CA cert
+	var clusterConfig string
+	if caCertData != "" {
+		clusterConfig = fmt.Sprintf(`- cluster:
+    certificate-authority-data: %s
+    server: %s
+  name: %s`, caCertData, serverURL, i.config.Azure.TargetCluster.Name)
+	} else {
+		clusterConfig = fmt.Sprintf(`- cluster:
+    insecure-skip-tls-verify: true
+    server: %s
+  name: %s`, serverURL, i.config.Azure.TargetCluster.Name)
+	}
+
+	// Create kubeconfig with bootstrap token authentication
+	kubeconfigContent := fmt.Sprintf(`apiVersion: v1
+kind: Config
+clusters:
+%s
+contexts:
+- context:
+    cluster: %s
+    user: %s
+  name: %s
+current-context: %s
+users:
+- name: %s
+  user:
+    token: %s
+`,
+		clusterConfig,
+		i.config.Azure.TargetCluster.Name,
+		username,
+		i.config.Azure.TargetCluster.Name,
+		i.config.Azure.TargetCluster.Name,
+		username,
+		bootstrapToken)
+
+	// Write kubeconfig file to the correct location for kubelet
+	if err := utils.WriteFileAtomicSystem(KubeletKubeconfigPath, []byte(kubeconfigContent), 0o600); err != nil {
+		return fmt.Errorf("failed to create bootstrap kubeconfig file: %w", err)
+	}
+
+	i.logger.Info("Bootstrap token kubeconfig created successfully")
+	return nil
+}
+
+// setUpClients sets up Azure SDK clients for fetching cluster credentials
 func (i *Installer) setUpClients() error {
 	cred, err := auth.NewAuthProvider().UserCredential(config.GetConfig())
 	if err != nil {
@@ -575,7 +659,7 @@ func (i *Installer) setUpClients() error {
 	return nil
 }
 
-// GetClusterCredentials retrieves cluster kube admin credentials using Azure SDK
+// getClusterCredentials retrieves cluster kube admin credentials using Azure SDK
 func (i *Installer) getClusterCredentials(ctx context.Context) ([]byte, error) {
 	cfg := config.GetConfig()
 	clusterResourceGroup := cfg.GetTargetClusterResourceGroup()
